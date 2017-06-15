@@ -1,0 +1,14 @@
+author: mongoose-os
+description: Implements Mongoose OS OTA HTTP client
+type: lib
+version: 1.0
+
+sources:
+  - src
+
+tags:
+  - c
+  - spi
+  - vfs
+
+skeleton_version: 2017-05-18
