@@ -268,8 +268,8 @@ out_err:
   return ret;
 }
 
-static bool mgos_vfs_dev_spi_flash_init2(struct mgos_vfs_dev *dev,
-                                         const char *opts) {
+static bool mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
+                                        const char *opts) {
   bool ret = false;
   unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
   struct dev_data *dd = (struct dev_data *) calloc(1, sizeof(*dd));
@@ -373,7 +373,7 @@ static bool mgos_vfs_dev_spi_flash_close(struct mgos_vfs_dev *dev) {
 }
 
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
-    .init = mgos_vfs_dev_spi_flash_init2,
+    .open = mgos_vfs_dev_spi_flash_open,
     .read = mgos_vfs_dev_spi_flash_read,
     .write = mgos_vfs_dev_spi_flash_write,
     .erase = mgos_vfs_dev_spi_flash_erase,
