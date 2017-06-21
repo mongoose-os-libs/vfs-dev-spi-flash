@@ -4,6 +4,7 @@
  */
 
 #include "mgos_vfs_dev_spi_flash.h"
+#include "mgos_spi.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -15,7 +16,6 @@
 #include "mongoose/mongoose.h"
 
 #include "fw/src/mgos_hal.h"
-#include "fw/src/mgos_spi.h"
 #include "fw/src/mgos_utils.h"
 #include "fw/src/mgos_vfs_dev.h"
 

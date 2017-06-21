@@ -6,6 +6,9 @@ version: 1.0
 sources:
   - src
 
+libs:
+  - origin: https://github.com/mongoose-os-libs/spi
+
 tags:
   - c
   - spi
