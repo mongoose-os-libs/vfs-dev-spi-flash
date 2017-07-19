@@ -15,9 +15,9 @@
 #include "frozen/frozen.h"
 #include "mongoose/mongoose.h"
 
-#include "fw/src/mgos_hal.h"
-#include "fw/src/mgos_utils.h"
-#include "fw/src/mgos_vfs_dev.h"
+#include "mgos_hal.h"
+#include "mgos_utils.h"
+#include "mgos_vfs_dev.h"
 
 struct dev_data {
   struct mgos_spi *spi;
