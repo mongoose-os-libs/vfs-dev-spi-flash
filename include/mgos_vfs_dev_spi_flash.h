@@ -14,8 +14,6 @@
 extern "C" {
 #endif
 
-bool mgos_vfs_dev_spi_flash_init(void);
-
 #ifdef __cplusplus
 }
 #endif
