@@ -46,11 +46,11 @@ struct dev_data {
 #define SPI_FLASH_DEFAULT_WIP_MASK 0x01
 
 #define SFDP_MAGIC 0x50444653 /* "SFDP" (LE) */
-#define SFDP_PT0_LEN 9        /* DWORDs */
+#define SFDP_PT0_LEN 9        /* DWORDs, for rev 1.0 */
 
 /* Note: structs below assume LE architecture */
 
-/* SFDP is documented in JEDEC 216 */
+/* SFDP is documented in JESD216 */
 struct __attribute__((packed)) sfdp_header {
   uint32_t magic;
   struct {
@@ -88,6 +88,7 @@ struct __attribute__((packed)) sfdp_pt0 {
     uint32_t fr_1_2_2 : 1;    /* 1: 1-2-2 Fast Read is supported. */
     uint32_t fr_1_4_4 : 1;    /* 1: 1-4-4 Fast Read is supported. */
     uint32_t fr_1_1_4 : 1;    /* 1: 1-1-4 Fast Read is supported. */
+    uint32_t unused_1 : 1;    /* Unused, set to 1. */
     uint32_t unused_ff : 8;   /* Unused, contains 0xff. */
   };
   struct {
@@ -140,6 +141,7 @@ struct __attribute__((packed)) sfdp_pt0 {
     uint32_t erase_st4_size : 8; /* Erase sector type 4 size (2^N) */
     uint32_t erase_st4_op : 8;   /* Erase sector type 4 opcode */
   };
+  /* TODO(rojer): JESD216A and B introduced more fields, add them. */
 };
 
 static bool spi_flash_op(struct dev_data *dd, size_t tx_len,
@@ -216,7 +218,7 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
     }
     struct sfdp_parameter_header *pt0h =
         (struct sfdp_parameter_header *) &rx_data[2];
-    if (pt0h->len_dw != SFDP_PT0_LEN) {
+    if (pt0h->len_dw < SFDP_PT0_LEN) {
       LOG(LL_ERROR, ("Invalid SFDP PT0 length (%d)", (int) pt0h->len_dw));
       goto out_nosfdp;
     }
@@ -238,15 +240,16 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
          (pt0->fr_1_2_2 ? " 1-2-2" : ""), (pt0->fr_1_4_4 ? " 1-4-4" : ""),
          (pt0->fr_1_1_4 ? " 1-1-4" : ""), (pt0->fr_2_2_2 ? " 2-2-2" : ""),
          (pt0->fr_4_4_4 ? " 4-4-4" : "")));
-    LOG(LL_DEBUG, ("Erase sizes: %d(0x%x) %d(0x%x) %d(0x%x) %d(0x%x) %d",
-                   (int) (pt0->erase_st1_op ? 1 << pt0->erase_st1_size : 0),
-                   (int) pt0->erase_st1_op,
-                   (int) (pt0->erase_st2_op ? 1 << pt0->erase_st2_size : 0),
-                   (int) pt0->erase_st2_op,
-                   (int) (pt0->erase_st3_op ? 1 << pt0->erase_st3_size : 0),
-                   (int) pt0->erase_st3_op,
-                   (int) (pt0->erase_st4_op ? 1 << pt0->erase_st4_size : 0),
-                   (int) pt0->erase_st4_op, pt0->write_gran));
+    LOG(LL_DEBUG,
+        ("Erase sizes: %d(0x%x) %d(0x%x) %d(0x%x) %d(0x%x) %d",
+         (int) (pt0->erase_st1_size > 0 ? 1 << pt0->erase_st1_size : 0),
+         (int) pt0->erase_st1_op,
+         (int) (pt0->erase_st2_size > 0 ? 1 << pt0->erase_st2_size : 0),
+         (int) pt0->erase_st2_op,
+         (int) (pt0->erase_st3_size > 0 ? 1 << pt0->erase_st3_size : 0),
+         (int) pt0->erase_st3_op,
+         (int) (pt0->erase_st4_size > 0 ? 1 << pt0->erase_st4_size : 0),
+         (int) pt0->erase_st4_op, pt0->write_gran));
     dd->erase_sector_op = pt0->erase_4k_op;
     /* TODO(rojer): double and quad reads, if both chip and SPI support them. */
   }
