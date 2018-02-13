@@ -11,6 +11,7 @@
 #include <stdlib.h>
 
 #include "common/cs_dbg.h"
+#include "common/platform.h"
 
 #include "frozen/frozen.h"
 #include "mongoose/mongoose.h"
@@ -206,7 +207,7 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
     }
     struct sfdp_header *sh = (struct sfdp_header *) rx_data;
     if (sh->magic != SFDP_MAGIC) {
-      LOG(LL_DEBUG, ("Invalid SFDP magic (got 0x%08x)", sh->magic));
+      LOG(LL_DEBUG, ("Invalid SFDP magic (got 0x%08x)", (unsigned) sh->magic));
       goto out_nosfdp;
     }
     if (sh->major_rev != 1) {
