@@ -472,7 +472,6 @@ static bool mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
   if (dd->freq <= 0) goto out;
   dd->wip_mask = wip_mask;
   dd->dpd_en = dpd_en;
-  spi_flash_wait_idle(dd);
   if (dd->dpd_en) {
     /* So, the problem is that the device may already be in DPD, we need to take
      * it out of it.
