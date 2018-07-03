@@ -48,6 +48,10 @@
 #define SFDP_V10_PT0_LEN (9 * 4)  /* rev 1.0 */
 #define SFDP_V16_PT0_LEN (16 * 4) /* rev 1.6 */
 
+/* Microchip SPI SST-series chips default to write-locked state. */
+#define SPI_FLASH_VENDOR_MICROCHIP 0xbf
+#define SPI_FLASH_OP_GBP_UNLOCK 0x98
+
 /* Note: structs below assume LE architecture */
 
 /* SFDP is documented in JESD216 */
@@ -448,6 +452,11 @@ out_nosfdp:
   }
   LOG(LL_DEBUG,
       ("Chip ID: %02x %02x, size: %d", jid[0], jid[1], (int) dd->size));
+  if (jid[0] == SPI_FLASH_VENDOR_MICROCHIP) {
+    if (!spi_flash_simple_op(dd, SPI_FLASH_OP_GBP_UNLOCK, 0, 0, NULL)) {
+      goto out_err;
+    }
+  }
   ret = true;
 
 out_err:
@@ -603,6 +612,7 @@ out:
 static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_erase(
     struct mgos_vfs_dev *dev, size_t offset, size_t len) {
   enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_IO;
+  size_t off = offset, l = len;
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
   if (offset % SPI_FLASH_SECTOR_SIZE != 0 || len % SPI_FLASH_SECTOR_SIZE != 0 ||
       offset >= dd->size) {
@@ -611,13 +621,13 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_erase(
   }
   if (!spi_flash_dpd_exit(dd)) goto out;
   if (!spi_flash_wait_idle(dd)) goto out;
-  while (len > 0) {
-    uint32_t tx_data = htonl((dd->erase_sector_op << 24) | offset);
+  while (l > 0) {
+    uint32_t tx_data = htonl((dd->erase_sector_op << 24) | off);
     if (!spi_flash_wren(dd)) goto out;
     if (!spi_flash_op(dd, 4, &tx_data, 0, 0, NULL)) goto out;
     if (!spi_flash_wait_idle(dd)) goto out;
-    len -= SPI_FLASH_SECTOR_SIZE;
-    offset += SPI_FLASH_SECTOR_SIZE;
+    l -= SPI_FLASH_SECTOR_SIZE;
+    off += SPI_FLASH_SECTOR_SIZE;
   }
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
