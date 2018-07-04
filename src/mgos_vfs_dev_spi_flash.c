@@ -485,6 +485,8 @@ static bool mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
   if (dd->dpd_en && dd->dpd_enter_op == 0) dd->dpd_en = false;
   LOG(LL_DEBUG, ("DPD: %s, 0x%02x/0x%02x, %dus", (dd->dpd_en ? "yes" : "no"),
                  dd->dpd_enter_op, dd->dpd_exit_op, dd->dpd_exit_sleep_us));
+  if (!spi_flash_simple_op(dd, 0x98, 0, 0, NULL)) goto out;
+  LOG(LL_DEBUG, ("Global unlock command sent"));
   dev->dev_data = dd;
   spi_flash_dpd_enter(dd);
   ret = true;
@@ -546,6 +548,7 @@ static bool mgos_vfs_dev_spi_flash_write(struct mgos_vfs_dev *dev,
 static bool mgos_vfs_dev_spi_flash_erase(struct mgos_vfs_dev *dev,
                                          size_t offset, size_t len) {
   bool ret = true;
+  size_t wlen = len;
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
   if (offset % SPI_FLASH_SECTOR_SIZE != 0 || len % SPI_FLASH_SECTOR_SIZE != 0 ||
       offset >= dd->size) {
@@ -553,12 +556,12 @@ static bool mgos_vfs_dev_spi_flash_erase(struct mgos_vfs_dev *dev,
   }
   ret = ret && spi_flash_dpd_exit(dd);
   ret = ret && spi_flash_wait_idle(dd);
-  while (ret && len > 0) {
+  while (ret && wlen > 0) {
     uint32_t tx_data = htonl((dd->erase_sector_op << 24) | offset);
     ret = ret && spi_flash_wren(dd);
     ret = ret && spi_flash_op(dd, 4, &tx_data, 0, 0, NULL);
     ret = ret && spi_flash_wait_idle(dd);
-    len -= SPI_FLASH_SECTOR_SIZE;
+    wlen -= SPI_FLASH_SECTOR_SIZE;
     offset += SPI_FLASH_SECTOR_SIZE;
   }
   spi_flash_dpd_enter(dd);
