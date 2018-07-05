@@ -1,5 +1,5 @@
 author: mongoose-os
-description: Implements Mongoose OS OTA HTTP client
+description: VFS device driver for SPI NOR flash
 type: lib
 version: 1.0
 

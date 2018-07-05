@@ -15,19 +15,14 @@
  * limitations under the License.
  */
 
-#ifndef CS_MOS_LIBS_VFS_DEV_SPI_FLASH_SRC_MGOS_VFS_DEV_SPI_FLASH_H_
-#define CS_MOS_LIBS_VFS_DEV_SPI_FLASH_SRC_MGOS_VFS_DEV_SPI_FLASH_H_
-
-#include <stdbool.h>
-
-#define MGOS_VFS_DEV_TYPE_SPI_FLASH "spi_flash"
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define MGOS_VFS_DEV_TYPE_SPI_FLASH "spi_flash"
+
 #ifdef __cplusplus
 }
 #endif
-
-#endif /* CS_MOS_LIBS_VFS_DEV_SPI_FLASH_SRC_MGOS_VFS_DEV_SPI_FLASH_H_ */

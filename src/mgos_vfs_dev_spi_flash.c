@@ -453,16 +453,17 @@ out_err:
   return ret;
 }
 
-static bool mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
-                                        const char *opts) {
-  bool ret = false;
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(
+    struct mgos_vfs_dev *dev, const char *opts) {
   int dpd_en = 0;
+  enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_INVAL;
   unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
   struct dev_data *dd = (struct dev_data *) calloc(1, sizeof(*dd));
   if (dd == NULL) goto out;
   dd->spi = mgos_spi_get_global();
   if (dd->spi == NULL) {
     LOG(LL_INFO, ("SPI is disabled"));
+    res = MGOS_VFS_DEV_ERR_NXIO;
     goto out;
   }
   dd->cs = -1;
@@ -481,47 +482,58 @@ static bool mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
     dd->dpd_exit_sleep_us = 100;
     spi_flash_dpd_exit(dd);
   }
-  if (!mgos_vfs_dev_spi_flash_detect(dd)) goto out;
+  if (!mgos_vfs_dev_spi_flash_detect(dd)) {
+    res = MGOS_VFS_DEV_ERR_NXIO;
+    goto out;
+  }
   if (dd->dpd_en && dd->dpd_enter_op == 0) dd->dpd_en = false;
   LOG(LL_DEBUG, ("DPD: %s, 0x%02x/0x%02x, %dus", (dd->dpd_en ? "yes" : "no"),
                  dd->dpd_enter_op, dd->dpd_exit_op, dd->dpd_exit_sleep_us));
   dev->dev_data = dd;
   spi_flash_dpd_enter(dd);
-  ret = true;
+  res = MGOS_VFS_DEV_ERR_NONE;
 
 out:
-  if (!ret) free(dd);
-  return ret;
+  if (res != 0) free(dd);
+  return res;
 }
 
-static bool mgos_vfs_dev_spi_flash_read(struct mgos_vfs_dev *dev, size_t offset,
-                                        size_t len, void *dst) {
-  bool ret = true;
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_read(
+    struct mgos_vfs_dev *dev, size_t offset, size_t len, void *dst) {
+  enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_IO;
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
-  if (offset + len > dd->size) ret = false;
-  if (ret && len > 0) {
+  if (offset + len > dd->size) {
+    res = MGOS_VFS_DEV_ERR_INVAL;
+    goto out;
+  }
+  if (len > 0) {
     uint32_t tx_data = htonl((dd->read_op << 24) | offset);
-    ret = ret && spi_flash_dpd_exit(dd);
-    ret = ret && spi_flash_wait_idle(dd);
-    ret = ret && spi_flash_op(dd, 4, &tx_data, dd->read_op_nwb, len, dst);
+    if (!spi_flash_dpd_exit(dd)) goto out;
+    if (!spi_flash_wait_idle(dd)) goto out;
+    if (!spi_flash_op(dd, 4, &tx_data, dd->read_op_nwb, len, dst)) goto out;
     spi_flash_dpd_enter(dd);
   }
-  LOG(LL_VERBOSE_DEBUG, ("%p read %u @ 0x%x -> %d", dev, (unsigned int) len,
-                         (unsigned int) offset, ret));
-  return ret;
+  res = MGOS_VFS_DEV_ERR_NONE;
+out:
+  LOG((res == 0 ? LL_VERBOSE_DEBUG : LL_ERROR),
+      ("%p read %u @ 0x%x -> %d", dev, (unsigned int) len,
+       (unsigned int) offset, res));
+  return res;
 }
 
-static bool mgos_vfs_dev_spi_flash_write(struct mgos_vfs_dev *dev,
-                                         size_t offset, size_t len,
-                                         const void *src) {
-  bool ret = true;
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_write(
+    struct mgos_vfs_dev *dev, size_t offset, size_t len, const void *src) {
+  enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_IO;
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
-  if (offset + len > dd->size) ret = false;
-  ret = ret && spi_flash_dpd_exit(dd);
-  ret = ret && spi_flash_wait_idle(dd);
   const uint8_t *data = (const uint8_t *) src;
   size_t off = offset, l = len;
-  while (ret && l > 0) {
+  if (offset + len > dd->size) {
+    res = MGOS_VFS_DEV_ERR_INVAL;
+    goto out;
+  }
+  if (!spi_flash_dpd_exit(dd)) goto out;
+  if (!spi_flash_wait_idle(dd)) goto out;
+  while (l > 0) {
     uint32_t tx_data[9] = {htonl((SPI_FLASH_OP_PROGRAM_PAGE << 24) | off)};
     size_t write_len = MIN(l, 32);
     if (off % SPI_FLASH_PAGE_SIZE != 0) {
@@ -530,41 +542,46 @@ static bool mgos_vfs_dev_spi_flash_write(struct mgos_vfs_dev *dev,
       write_len = MIN(write_len, page_remain);
     }
     memcpy(tx_data + 1, data, write_len);
-    ret = ret && spi_flash_wren(dd);
-    ret = ret && spi_flash_op(dd, 4 + write_len, &tx_data, 0, 0, NULL);
-    ret = ret && spi_flash_wait_idle(dd);
+    if (!spi_flash_wren(dd)) goto out;
+    if (!spi_flash_op(dd, 4 + write_len, &tx_data, 0, 0, NULL)) goto out;
+    if (!spi_flash_wait_idle(dd)) goto out;
     l -= write_len;
     data += write_len;
     off += write_len;
   }
   spi_flash_dpd_enter(dd);
+  res = MGOS_VFS_DEV_ERR_NONE;
+out:
   LOG(LL_VERBOSE_DEBUG, ("%p write %u @ 0x%x -> %d", dev, (unsigned int) len,
-                         (unsigned int) offset, ret));
-  return ret;
+                         (unsigned int) offset, res));
+  return res;
 }
 
-static bool mgos_vfs_dev_spi_flash_erase(struct mgos_vfs_dev *dev,
-                                         size_t offset, size_t len) {
-  bool ret = true;
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_erase(
+    struct mgos_vfs_dev *dev, size_t offset, size_t len) {
+  enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_IO;
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
   if (offset % SPI_FLASH_SECTOR_SIZE != 0 || len % SPI_FLASH_SECTOR_SIZE != 0 ||
       offset >= dd->size) {
-    ret = false;
+    res = MGOS_VFS_DEV_ERR_INVAL;
+    goto out;
   }
-  ret = ret && spi_flash_dpd_exit(dd);
-  ret = ret && spi_flash_wait_idle(dd);
-  while (ret && len > 0) {
+  if (!spi_flash_dpd_exit(dd)) goto out;
+  if (!spi_flash_wait_idle(dd)) goto out;
+  while (len > 0) {
     uint32_t tx_data = htonl((dd->erase_sector_op << 24) | offset);
-    ret = ret && spi_flash_wren(dd);
-    ret = ret && spi_flash_op(dd, 4, &tx_data, 0, 0, NULL);
-    ret = ret && spi_flash_wait_idle(dd);
+    if (!spi_flash_wren(dd)) goto out;
+    if (!spi_flash_op(dd, 4, &tx_data, 0, 0, NULL)) goto out;
+    if (!spi_flash_wait_idle(dd)) goto out;
     len -= SPI_FLASH_SECTOR_SIZE;
     offset += SPI_FLASH_SECTOR_SIZE;
   }
   spi_flash_dpd_enter(dd);
+  res = MGOS_VFS_DEV_ERR_NONE;
+out:
   LOG(LL_VERBOSE_DEBUG, ("%p erase %u @ 0x%x -> %d", dev, (unsigned int) len,
-                         (unsigned int) offset, ret));
-  return ret;
+                         (unsigned int) offset, res));
+  return res;
 }
 
 static size_t mgos_vfs_dev_spi_flash_get_size(struct mgos_vfs_dev *dev) {
@@ -572,10 +589,10 @@ static size_t mgos_vfs_dev_spi_flash_get_size(struct mgos_vfs_dev *dev) {
   return dd->size;
 }
 
-static bool mgos_vfs_dev_spi_flash_close(struct mgos_vfs_dev *dev) {
-  /* Nothing to do. */
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
+    struct mgos_vfs_dev *dev) {
   (void) dev;
-  return true;
+  return MGOS_VFS_DEV_ERR_NONE;
 }
 
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
