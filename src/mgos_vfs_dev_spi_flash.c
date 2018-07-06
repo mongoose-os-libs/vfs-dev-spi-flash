@@ -552,8 +552,9 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_write(
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
 out:
-  LOG(LL_VERBOSE_DEBUG, ("%p write %u @ 0x%x -> %d", dev, (unsigned int) len,
-                         (unsigned int) offset, res));
+  LOG((res == 0 ? LL_VERBOSE_DEBUG : LL_ERROR),
+      ("%p write %u @ 0x%x -> %d", dev, (unsigned int) len,
+       (unsigned int) offset, res));
   return res;
 }
 
@@ -579,8 +580,9 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_erase(
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
 out:
-  LOG(LL_VERBOSE_DEBUG, ("%p erase %u @ 0x%x -> %d", dev, (unsigned int) len,
-                         (unsigned int) offset, res));
+  LOG((res == 0 ? LL_VERBOSE_DEBUG : LL_ERROR),
+      ("%p erase %u @ 0x%x -> %d", dev, (unsigned int) len,
+       (unsigned int) offset, res));
   return res;
 }
 
