@@ -276,9 +276,10 @@ struct dev_data {
   uint8_t erase_sector_op;
   uint8_t wip_mask;
   uint8_t dpd_enter_op, dpd_exit_op;
-  uint32_t dpd_en : 1; /* Enable Deep Power Down when inactive (if supported) */
-  uint32_t dpd_on : 1; /* The chip is currently in Deep Power Down mode */
   uint32_t dpd_exit_sleep_us : 8;
+  uint32_t dpd_en : 1;  /* Enable Deep Power Down when inactive (if supp.) */
+  uint32_t dpd_on : 1;  /* The chip is currently in Deep Power Down mode */
+  uint32_t own_spi : 1; /* If true, the SPI interface was created by us. */
 };
 
 static bool spi_flash_op(struct dev_data *dd, size_t tx_len,
@@ -458,19 +459,36 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(
   int dpd_en = 0;
   enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_INVAL;
   unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
+  struct json_token spi_cfg_json = JSON_INVALID_TOKEN;
   struct dev_data *dd = (struct dev_data *) calloc(1, sizeof(*dd));
   if (dd == NULL) goto out;
-  dd->spi = mgos_spi_get_global();
-  if (dd->spi == NULL) {
-    LOG(LL_INFO, ("SPI is disabled"));
-    res = MGOS_VFS_DEV_ERR_NXIO;
-    goto out;
-  }
   dd->cs = -1;
   json_scanf(opts, strlen(opts),
-             "{cs: %d, freq: %d, mode: %d, size: %d, wip_mask: %u, dpd: %B}",
-             &dd->cs, &dd->freq, &dd->mode, &dd->size, &wip_mask, &dpd_en);
+             "{cs: %d, freq: %d, mode: %d, size: %d, wip_mask: %u, dpd: %B, "
+             "spi: %T}",
+             &dd->cs, &dd->freq, &dd->mode, &dd->size, &wip_mask, &dpd_en,
+             &spi_cfg_json);
   if (dd->freq <= 0) goto out;
+  if (spi_cfg_json.ptr != NULL) {
+    struct mgos_config_spi spi_cfg = {.enable = true};
+    if (!mgos_spi_config_from_json(
+            mg_mk_str_n(spi_cfg_json.ptr, spi_cfg_json.len), &spi_cfg)) {
+      LOG(LL_ERROR, ("Invalid SPI config"));
+      goto out;
+    }
+    dd->spi = mgos_spi_create(&spi_cfg);
+    if (dd->spi == NULL) {
+      goto out;
+    }
+    dd->own_spi = true;
+  } else {
+    dd->spi = mgos_spi_get_global();
+    if (dd->spi == NULL) {
+      LOG(LL_INFO, ("SPI is disabled"));
+      res = MGOS_VFS_DEV_ERR_NXIO;
+      goto out;
+    }
+  }
   dd->wip_mask = wip_mask;
   dd->dpd_en = dpd_en;
   if (dd->dpd_en) {
@@ -593,7 +611,8 @@ static size_t mgos_vfs_dev_spi_flash_get_size(struct mgos_vfs_dev *dev) {
 
 static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
     struct mgos_vfs_dev *dev) {
-  (void) dev;
+  struct dev_data *dd = (struct dev_data *) dev->dev_data;
+  if (dd->own_spi) mgos_spi_close(dd->spi);
   return MGOS_VFS_DEV_ERR_NONE;
 }
 
