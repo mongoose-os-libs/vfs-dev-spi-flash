@@ -361,7 +361,8 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
       goto out_err;
     }
   }
-  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x", jid[0], jid[1], jid[2]));
+  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x SR 0x%02x", jid[0], jid[1], jid[2],
+                 spi_flash_rdsr(dd)));
 
   { /* Retrieve SFDP header and parameter table pointer. */
     uint32_t tx_data = htonl(SPI_FLASH_OP_READ_SFDP << 24);
