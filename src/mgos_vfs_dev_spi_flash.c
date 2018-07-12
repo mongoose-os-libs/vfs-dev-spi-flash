@@ -212,7 +212,7 @@ struct __attribute__((packed)) sfdp_pt0 {
   };
 };
 
-static uint32_t sfdp_sector_erase_time_ms(uint8_t val, uint8_t unit) {
+uint32_t sfdp_sector_erase_time_ms(uint8_t val, uint8_t unit) {
   uint32_t v32 = ((uint32_t) val) + 1;
   switch (unit) {
     case 0:
@@ -227,7 +227,7 @@ static uint32_t sfdp_sector_erase_time_ms(uint8_t val, uint8_t unit) {
   return 0;
 }
 
-static uint32_t sfdp_chip_erase_time_ms(uint8_t val, uint8_t unit) {
+uint32_t sfdp_chip_erase_time_ms(uint8_t val, uint8_t unit) {
   uint32_t v32 = ((uint32_t) val) + 1;
   switch (unit) {
     case 0:
@@ -267,9 +267,7 @@ static uint32_t swap_byte_32(uint32_t x) {
 
 struct dev_data {
   struct mgos_spi *spi;
-  int cs;
-  int freq;
-  int mode;
+  int spi_cs, spi_freq, spi_mode;
   size_t size;
   uint8_t read_op;
   uint8_t read_op_nwb;
@@ -285,7 +283,8 @@ struct dev_data {
 static bool spi_flash_op(struct dev_data *dd, size_t tx_len,
                          const void *tx_data, int dummy_len, size_t rx_len,
                          void *rx_data) {
-  struct mgos_spi_txn txn = {.cs = dd->cs, .mode = dd->mode, .freq = dd->freq};
+  struct mgos_spi_txn txn = {
+      .cs = dd->spi_cs, .mode = dd->spi_mode, .freq = dd->spi_freq};
   txn.hd.tx_len = tx_len;
   txn.hd.tx_data = tx_data;
   txn.hd.dummy_len = dummy_len;
@@ -455,43 +454,25 @@ out_err:
   return ret;
 }
 
-static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(
-    struct mgos_vfs_dev *dev, const char *opts) {
-  int dpd_en = 0;
+enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
+                                         struct mgos_spi *spi, int spi_cs,
+                                         int spi_freq, int spi_mode,
+                                         size_t size, int wip_mask,
+                                         bool dpd_en) {
   enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_INVAL;
-  unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
-  struct json_token spi_cfg_json = JSON_INVALID_TOKEN;
   struct dev_data *dd = (struct dev_data *) calloc(1, sizeof(*dd));
-  if (dd == NULL) goto out;
-  dd->cs = -1;
-  json_scanf(opts, strlen(opts),
-             "{cs: %d, freq: %d, mode: %d, size: %d, wip_mask: %u, dpd: %B, "
-             "spi: %T}",
-             &dd->cs, &dd->freq, &dd->mode, &dd->size, &wip_mask, &dpd_en,
-             &spi_cfg_json);
-  if (dd->freq <= 0) goto out;
-  if (spi_cfg_json.ptr != NULL) {
-    struct mgos_config_spi spi_cfg = {.enable = true};
-    if (!mgos_spi_config_from_json(
-            mg_mk_str_n(spi_cfg_json.ptr, spi_cfg_json.len), &spi_cfg)) {
-      LOG(LL_ERROR, ("Invalid SPI config"));
-      goto out;
-    }
-    dd->spi = mgos_spi_create(&spi_cfg);
-    if (dd->spi == NULL) {
-      goto out;
-    }
-    dd->own_spi = true;
-  } else {
-    dd->spi = mgos_spi_get_global();
-    if (dd->spi == NULL) {
-      LOG(LL_INFO, ("SPI is disabled"));
-      res = MGOS_VFS_DEV_ERR_NXIO;
-      goto out;
-    }
+  if (dd == NULL) {
+    res = MGOS_VFS_DEV_ERR_NOMEM;
+    goto out;
   }
+  dd->spi = spi;
+  dd->spi_cs = spi_cs;
+  dd->spi_freq = spi_freq;
+  dd->spi_mode = spi_mode;
+  dd->size = size;
   dd->wip_mask = wip_mask;
   dd->dpd_en = dpd_en;
+  if (dd->spi_freq <= 0) goto out;
   if (dd->dpd_en) {
     /* So, the problem is that the device may already be in DPD, we need to take
      * it out of it.
@@ -511,9 +492,51 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(
   dev->dev_data = dd;
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
-
 out:
   if (res != 0) free(dd);
+  return res;
+}
+
+enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
+                                                  const char *opts) {
+  enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_INVAL;
+  struct json_token spi_cfg_json = JSON_INVALID_TOKEN;
+  struct mgos_spi *spi = NULL;
+  int cs_num = -1, spi_freq = 0, spi_mode = 0, dpd_en = false;
+  unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
+  unsigned long size = 0;
+  json_scanf(opts, strlen(opts), ("{cs: %d, freq: %d, mode: %d, size: %lu, "
+                                  "wip_mask: %u, dpd: %B, spi: %T}"),
+             &cs_num, &spi_freq, &spi_mode, &size, &wip_mask, &dpd_en,
+             &spi_cfg_json);
+  if (spi_cfg_json.ptr != NULL) {
+    struct mgos_config_spi spi_cfg = {.enable = true};
+    if (!mgos_spi_config_from_json(
+            mg_mk_str_n(spi_cfg_json.ptr, spi_cfg_json.len), &spi_cfg)) {
+      LOG(LL_ERROR, ("Invalid SPI config"));
+      goto out;
+    }
+    spi = mgos_spi_create(&spi_cfg);
+    if (spi == NULL) goto out;
+  } else {
+    spi = mgos_spi_get_global();
+    if (spi == NULL) {
+      LOG(LL_INFO, ("SPI is disabled"));
+      res = MGOS_VFS_DEV_ERR_NXIO;
+      goto out;
+    }
+  }
+  res = spi_flash_dev_init(dev, spi, cs_num, spi_freq, spi_mode, size, wip_mask,
+                           dpd_en);
+  {
+    struct dev_data *dd = (struct dev_data *) dev->dev_data;
+    dd->own_spi = (spi != mgos_spi_get_global());
+    if (res != 0 && dd->own_spi) {
+      mgos_spi_close(spi);
+    }
+  }
+
+out:
   return res;
 }
 
@@ -618,7 +641,9 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
 }
 
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
+#ifndef MGOS_NO_MAIN
     .open = mgos_vfs_dev_spi_flash_open,
+#endif
     .read = mgos_vfs_dev_spi_flash_read,
     .write = mgos_vfs_dev_spi_flash_write,
     .erase = mgos_vfs_dev_spi_flash_erase,

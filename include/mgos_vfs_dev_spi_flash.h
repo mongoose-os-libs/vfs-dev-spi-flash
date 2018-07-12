@@ -17,11 +17,23 @@
 
 #pragma once
 
+#include <stdbool.h>
+#include <stdlib.h>
+
+#include "mgos_spi.h"
+#include "mgos_vfs_dev.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 #define MGOS_VFS_DEV_TYPE_SPI_FLASH "spi_flash"
+
+enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
+                                         struct mgos_spi *spi, int spi_cs,
+                                         int spi_freq, int spi_mode,
+                                         size_t size, int wip_mask,
+                                         bool dpd_en);
 
 #ifdef __cplusplus
 }
