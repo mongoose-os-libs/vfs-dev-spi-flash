@@ -502,6 +502,7 @@ enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
   enum mgos_vfs_dev_err res = MGOS_VFS_DEV_ERR_INVAL;
   struct json_token spi_cfg_json = JSON_INVALID_TOKEN;
   struct mgos_spi *spi = NULL;
+  bool own_spi = false;
   int cs_num = -1, spi_freq = 0, spi_mode = 0, dpd_en = false;
   unsigned int wip_mask = SPI_FLASH_DEFAULT_WIP_MASK;
   unsigned long size = 0;
@@ -518,6 +519,7 @@ enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
     }
     spi = mgos_spi_create(&spi_cfg);
     if (spi == NULL) goto out;
+    own_spi = true;
   } else {
     spi = mgos_spi_get_global();
     if (spi == NULL) {
@@ -528,15 +530,13 @@ enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
   }
   res = spi_flash_dev_init(dev, spi, cs_num, spi_freq, spi_mode, size, wip_mask,
                            dpd_en);
-  {
+  if (res == 0) {
     struct dev_data *dd = (struct dev_data *) dev->dev_data;
-    dd->own_spi = (spi != mgos_spi_get_global());
-    if (res != 0 && dd->own_spi) {
-      mgos_spi_close(spi);
-    }
+    dd->own_spi = own_spi;
   }
 
 out:
+  if (res != 0 && own_spi) mgos_spi_close(spi);
   return res;
 }
 
