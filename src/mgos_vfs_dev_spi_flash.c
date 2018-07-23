@@ -651,7 +651,7 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
 }
 
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
-#ifndef MGOS_NO_MAIN
+#ifndef MGOS_BOOT_BUILD
     .open = mgos_vfs_dev_spi_flash_open,
 #endif
     .read = mgos_vfs_dev_spi_flash_read,
