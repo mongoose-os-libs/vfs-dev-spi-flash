@@ -520,7 +520,9 @@ enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_open(struct mgos_vfs_dev *dev,
              &cs_num, &spi_freq, &spi_mode, &size, &wip_mask, &dpd_en,
              &spi_cfg_json);
   if (spi_cfg_json.ptr != NULL) {
-    struct mgos_config_spi spi_cfg = {.enable = true};
+    struct mgos_config_spi spi_cfg = {
+        .enable = true, .cs0_gpio = -1, .cs1_gpio = -1, .cs2_gpio = -1,
+    };
     if (!mgos_spi_config_from_json(
             mg_mk_str_n(spi_cfg_json.ptr, spi_cfg_json.len), &spi_cfg)) {
       LOG(LL_ERROR, ("Invalid SPI config"));
@@ -651,9 +653,7 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
 }
 
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
-#ifndef MGOS_BOOT_BUILD
     .open = mgos_vfs_dev_spi_flash_open,
-#endif
     .read = mgos_vfs_dev_spi_flash_read,
     .write = mgos_vfs_dev_spi_flash_write,
     .erase = mgos_vfs_dev_spi_flash_erase,
