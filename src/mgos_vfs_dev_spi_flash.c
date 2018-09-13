@@ -275,13 +275,14 @@ struct dev_data {
   size_t size;
   uint8_t read_op;
   uint8_t read_op_nwb;
-  uint8_t erase_sector_op;
   uint8_t wip_mask;
   uint8_t dpd_enter_op, dpd_exit_op;
   uint32_t dpd_exit_sleep_us : 8;
   uint32_t dpd_en : 1;  /* Enable Deep Power Down when inactive (if supp.) */
   uint32_t dpd_on : 1;  /* The chip is currently in Deep Power Down mode */
   uint32_t own_spi : 1; /* If true, the SPI interface was created by us. */
+  uint8_t erase_ops[4];
+  size_t erase_sizes[4];
 };
 
 static bool spi_flash_op(struct dev_data *dd, size_t tx_len,
@@ -364,8 +365,7 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
       goto out_err;
     }
   }
-  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x SR 0x%02x", jid[0], jid[1], jid[2],
-                 spi_flash_rdsr(dd)));
+  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x", jid[0], jid[1], jid[2]));
 
   { /* Retrieve SFDP header and parameter table pointer. */
     uint32_t tx_data = htonl(SPI_FLASH_OP_READ_SFDP << 24);
@@ -407,27 +407,38 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
          (pt0.fr_1_2_2 ? " 1-2-2" : ""), (pt0.fr_1_4_4 ? " 1-4-4" : ""),
          (pt0.fr_1_1_4 ? " 1-1-4" : ""), (pt0.fr_2_2_2 ? " 2-2-2" : ""),
          (pt0.fr_4_4_4 ? " 4-4-4" : "")));
+    if (pt0.erase_st1_size > 0) {
+      dd->erase_ops[0] = pt0.erase_st1_op;
+      dd->erase_sizes[0] = 1 << pt0.erase_st1_size;
+    }
+    if (pt0.erase_st2_size > 0) {
+      dd->erase_ops[1] = pt0.erase_st2_op;
+      dd->erase_sizes[1] = 1 << pt0.erase_st2_size;
+    }
+    if (pt0.erase_st3_size > 0) {
+      dd->erase_ops[2] = pt0.erase_st3_op;
+      dd->erase_sizes[2] = 1 << pt0.erase_st3_size;
+    }
+    if (pt0.erase_st4_size > 0) {
+      dd->erase_ops[3] = pt0.erase_st4_op;
+      dd->erase_sizes[3] = 1 << pt0.erase_st4_size;
+    }
     LOG(LL_DEBUG,
         ("Erase: 0x%x:%d,%dms 0x%x:%d,%dms 0x%x:%d,%dms 0x%x:%d,%dms chip:%dms",
-         (int) pt0.erase_st1_op,
-         (int) (pt0.erase_st1_size > 0 ? 1 << pt0.erase_st1_size : 0),
+         (int) dd->erase_ops[0], (int) dd->erase_sizes[0],
          (int) sfdp_sector_erase_time_ms(pt0.erase_st1_typ,
                                          pt0.erase_st1_typ_u),
-         (int) pt0.erase_st2_op,
-         (int) (pt0.erase_st2_size > 0 ? 1 << pt0.erase_st2_size : 0),
+         (int) dd->erase_ops[1], (int) dd->erase_sizes[1],
          (int) sfdp_sector_erase_time_ms(pt0.erase_st2_typ,
                                          pt0.erase_st2_typ_u),
-         (int) pt0.erase_st3_op,
-         (int) (pt0.erase_st3_size > 0 ? 1 << pt0.erase_st3_size : 0),
+         (int) dd->erase_ops[2], (int) dd->erase_sizes[2],
          (int) sfdp_sector_erase_time_ms(pt0.erase_st3_typ,
                                          pt0.erase_st3_typ_u),
-         (int) pt0.erase_st4_op,
-         (int) (pt0.erase_st4_size > 0 ? 1 << pt0.erase_st4_size : 0),
+         (int) dd->erase_ops[3], (int) dd->erase_sizes[3],
          (int) sfdp_sector_erase_time_ms(pt0.erase_st4_typ,
                                          pt0.erase_st4_typ_u),
          (int) sfdp_chip_erase_time_ms(pt0.erase_chip_typ,
                                        pt0.erase_chip_typ_u)));
-    dd->erase_sector_op = pt0.erase_4k_op;
     if (sfdp_pt0_len >= SFDP_V16_PT0_LEN) {
       dd->dpd_enter_op = pt0.dpd_enter_op;
       dd->dpd_exit_op = pt0.dpd_exit_op;
@@ -449,6 +460,11 @@ out_nosfdp:
       LOG(LL_ERROR, ("Size not specified and could not be detected"));
       goto out_err;
     }
+  }
+  if (dd->erase_sizes[0] == 0) {
+    /* SFDP did not provide erase size info, assume 4K erases. */
+    dd->erase_sizes[0] = SPI_FLASH_SECTOR_SIZE;
+    dd->erase_ops[0] = SPI_FLASH_OP_ERASE_SECTOR;
   }
   LOG(LL_DEBUG,
       ("Chip ID: %02x %02x, size: %d", jid[0], jid[1], (int) dd->size));
@@ -624,12 +640,25 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_erase(
   if (!spi_flash_dpd_exit(dd)) goto out;
   if (!spi_flash_wait_idle(dd)) goto out;
   while (l > 0) {
-    uint32_t tx_data = htonl((dd->erase_sector_op << 24) | off);
+    uint32_t erase_op = 0;
+    size_t erase_size = 0;
+    /* Pick the largest erase op within the size limit. */
+    for (int i = 0; i < (int) ARRAY_SIZE(dd->erase_sizes); i++) {
+      size_t es = dd->erase_sizes[i];
+      if (es > 0 && es <= l && (off & (es - 1)) == 0) {
+        erase_op = dd->erase_ops[i];
+        erase_size = dd->erase_sizes[i];
+      } else {
+        break;
+      }
+    }
+    if (erase_size == 0) goto out;
+    uint32_t tx_data = htonl((erase_op << 24) | off);
     if (!spi_flash_wren(dd)) goto out;
     if (!spi_flash_op(dd, 4, &tx_data, 0, 0, NULL)) goto out;
     if (!spi_flash_wait_idle(dd)) goto out;
-    l -= SPI_FLASH_SECTOR_SIZE;
-    off += SPI_FLASH_SECTOR_SIZE;
+    l -= erase_size;
+    off += erase_size;
   }
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
@@ -652,6 +681,13 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
   return MGOS_VFS_DEV_ERR_NONE;
 }
 
+static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_get_erase_sizes(
+    struct mgos_vfs_dev *dev, size_t sizes[MGOS_VFS_DEV_NUM_ERASE_SIZES]) {
+  struct dev_data *dd = (struct dev_data *) dev->dev_data;
+  memcpy(sizes, dd->erase_sizes, sizeof(dd->erase_sizes));
+  return MGOS_VFS_DEV_ERR_NONE;
+}
+
 static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
     .open = mgos_vfs_dev_spi_flash_open,
     .read = mgos_vfs_dev_spi_flash_read,
@@ -659,6 +695,7 @@ static const struct mgos_vfs_dev_ops mgos_vfs_dev_spi_flash_ops = {
     .erase = mgos_vfs_dev_spi_flash_erase,
     .get_size = mgos_vfs_dev_spi_flash_get_size,
     .close = mgos_vfs_dev_spi_flash_close,
+    .get_erase_sizes = mgos_vfs_dev_spi_flash_get_erase_sizes,
 };
 
 bool mgos_vfs_dev_spi_flash_init(void) {
