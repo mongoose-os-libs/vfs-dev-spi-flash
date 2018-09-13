@@ -20,5 +20,6 @@ tags:
   - c
   - spi
   - vfs
+  - docs:drivers:VFS (SPI NOR Flash)
 
 manifest_version: 2018-06-20
