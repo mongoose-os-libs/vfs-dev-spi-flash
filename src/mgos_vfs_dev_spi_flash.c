@@ -350,6 +350,8 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
   dd->read_op = SPI_FLASH_OP_READ_FAST;
   dd->read_op_nwb = 1;
 
+  spi_flash_wait_idle(dd);
+
   uint8_t jid[4] = {0, 0, 0, 0};
   if (!spi_flash_simple_op(dd, SPI_FLASH_OP_READ_JEDEC_ID, 0, sizeof(jid),
                            jid)) {
