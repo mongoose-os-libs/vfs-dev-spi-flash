@@ -31,6 +31,7 @@
 #include "mgos_utils.h"
 #include "mgos_vfs_dev.h"
 
+#define SPI_FLASH_OP_WRSR 0x01
 #define SPI_FLASH_OP_PROGRAM_PAGE 0x02
 #define SPI_FLASH_OP_WRDI 0x04
 #define SPI_FLASH_OP_RDSR 0x05
@@ -43,10 +44,13 @@
 #define SPI_FLASH_PAGE_SIZE 0x100
 #define SPI_FLASH_SECTOR_SIZE 0x1000
 #define SPI_FLASH_DEFAULT_WIP_MASK 0x01
+#define SPI_FLASH_DEFAULT_WEL_MASK 0x02
 
 #define SFDP_MAGIC 0x50444653     /* "SFDP" (LE) */
 #define SFDP_V10_PT0_LEN (9 * 4)  /* rev 1.0 */
 #define SFDP_V16_PT0_LEN (16 * 4) /* rev 1.6 */
+
+#define SPI_FLASH_VENDOR_ADESTO 0x1f
 
 /* Microchip SPI SST-series chips default to write-locked state. */
 #define SPI_FLASH_VENDOR_MICROCHIP 0xbf
@@ -276,6 +280,7 @@ struct dev_data {
   uint8_t read_op;
   uint8_t read_op_nwb;
   uint8_t wip_mask;
+  uint8_t wel_mask;
   uint8_t dpd_enter_op, dpd_exit_op;
   uint32_t dpd_exit_sleep_us : 8;
   uint32_t dpd_en : 1;  /* Enable Deep Power Down when inactive (if supp.) */
@@ -283,6 +288,7 @@ struct dev_data {
   uint32_t own_spi : 1; /* If true, the SPI interface was created by us. */
   uint8_t erase_ops[4];
   size_t erase_sizes[4];
+  uint8_t *page_buf;
 };
 
 static bool spi_flash_op(struct dev_data *dd, size_t tx_len,
@@ -310,9 +316,13 @@ static uint8_t spi_flash_rdsr(struct dev_data *dd) {
 }
 
 static bool spi_flash_wren(struct dev_data *dd) {
-  while ((spi_flash_rdsr(dd) & 2) == 0) {  // WEL
-    if (!spi_flash_simple_op(dd, SPI_FLASH_OP_WREN, 0, 0, NULL)) return false;
-  }
+  size_t n = 0;
+  do {
+    if (n % 2 == 0) {
+      if (!spi_flash_simple_op(dd, SPI_FLASH_OP_WREN, 0, 0, NULL)) return false;
+    }
+    n++;
+  } while ((spi_flash_rdsr(dd) & dd->wel_mask) == 0);
   return true;
 }
 
@@ -363,11 +373,13 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
     if (jid[3] != 0 && jid[3] != 0xff) {
       memmove(jid, jid + 1, 3);
     } else {
-      LOG(LL_ERROR, ("Invalid JEDEC ID"));
+      LOG(LL_ERROR,
+          ("Invalid JEDEC ID (%02x %02x %02x)", jid[0], jid[1], jid[2]));
       goto out_err;
     }
   }
-  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x", jid[0], jid[1], jid[2]));
+  LOG(LL_DEBUG, ("JEDEC ID: %02x %02x %02x SR: %02x", jid[0], jid[1], jid[2],
+                 spi_flash_rdsr(dd)));
 
   { /* Retrieve SFDP header and parameter table pointer. */
     uint32_t tx_data = htonl(SPI_FLASH_OP_READ_SFDP << 24);
@@ -454,11 +466,16 @@ static bool mgos_vfs_dev_spi_flash_detect(struct dev_data *dd) {
   }
 
 out_nosfdp:
-  /* Ok, we don't have SFDP. Let's see if JEDEC ID byte 2 looks like size. */
+  /* Ok, we don't have SFDP. Let's see if we can get size from JEDEC ID. */
   if (dd->size == 0) {
-    if (jid[2] > 10 && jid[2] <= 31) {
+    /* Atmel/Adesto has their own scheme */
+    if (jid[0] == SPI_FLASH_VENDOR_ADESTO) {
+      dd->size = 32768 * (1 << (jid[1] & 0x1f));
+    } else if (jid[2] > 10 && jid[2] <= 31) {
+      /* See if ID byte 2 looks like size (exponent). */
       dd->size = (1 << jid[2]);
-    } else {
+    }
+    if (dd->size == 0) {
       LOG(LL_ERROR, ("Size not specified and could not be detected"));
       goto out_err;
     }
@@ -471,8 +488,24 @@ out_nosfdp:
   LOG(LL_DEBUG,
       ("Chip ID: %02x %02x, size: %d", jid[0], jid[1], (int) dd->size));
   if (jid[0] == SPI_FLASH_VENDOR_MICROCHIP) {
+    LOG(LL_INFO, ("Unlocking writes (%s)", "Microchip"));
     if (!spi_flash_simple_op(dd, SPI_FLASH_OP_GBP_UNLOCK, 0, 0, NULL)) {
       goto out_err;
+    }
+  } else if (jid[0] == SPI_FLASH_VENDOR_ADESTO) {
+    uint8_t family = (jid[1] >> 5);
+    // Only AT25Dxxx devices are supported, AT45D have different command set.
+    if (family != 2) {
+      LOG(LL_ERROR, ("Unsupported device family (%u)", family));
+      return false;
+    }
+    uint8_t sr = spi_flash_rdsr(dd);
+    if ((sr & 0x0c) != 0) {
+      LOG(LL_INFO, ("Unlocking writes (%s)", "Adesto"));
+    }
+    if (spi_flash_wren(dd)) {
+      uint8_t d[2] = {SPI_FLASH_OP_WRSR, 0};
+      if (!spi_flash_op(dd, 2, d, 0, 0, NULL)) return false;
     }
   }
   ret = true;
@@ -498,6 +531,7 @@ enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
   dd->spi_mode = spi_mode;
   dd->size = size;
   dd->wip_mask = wip_mask;
+  dd->wel_mask = SPI_FLASH_DEFAULT_WEL_MASK;
   dd->dpd_en = dpd_en;
   if (dd->spi_freq <= 0) goto out;
   if (dd->dpd_en) {
@@ -513,6 +547,8 @@ enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
     res = MGOS_VFS_DEV_ERR_NXIO;
     goto out;
   }
+  dd->page_buf = (uint8_t *) malloc(4 + SPI_FLASH_PAGE_SIZE);
+  if (dd->page_buf == NULL) goto out;
   if (dd->dpd_en && dd->dpd_enter_op == 0) dd->dpd_en = false;
   LOG(LL_DEBUG, ("DPD: %s, 0x%02x/0x%02x, %dus", (dd->dpd_en ? "yes" : "no"),
                  dd->dpd_enter_op, dd->dpd_exit_op, dd->dpd_exit_sleep_us));
@@ -520,7 +556,10 @@ enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
   spi_flash_dpd_enter(dd);
   res = MGOS_VFS_DEV_ERR_NONE;
 out:
-  if (res != 0) free(dd);
+  if (res != 0) {
+    free(dd->page_buf);
+    free(dd);
+  }
   return res;
 }
 
@@ -605,16 +644,19 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_write(
   if (!spi_flash_dpd_exit(dd)) goto out;
   if (!spi_flash_wait_idle(dd)) goto out;
   while (l > 0) {
-    uint32_t tx_data[9] = {htonl((SPI_FLASH_OP_PROGRAM_PAGE << 24) | off)};
-    size_t write_len = MIN(l, 32);
+    size_t write_len = MIN(l, SPI_FLASH_PAGE_SIZE);
     if (off % SPI_FLASH_PAGE_SIZE != 0) {
       size_t page_start = (off & ~(SPI_FLASH_PAGE_SIZE - 1));
       size_t page_remain = (SPI_FLASH_PAGE_SIZE - (off - page_start));
       write_len = MIN(write_len, page_remain);
     }
-    memcpy(tx_data + 1, data, write_len);
+    dd->page_buf[0] = SPI_FLASH_OP_PROGRAM_PAGE;
+    dd->page_buf[1] = (uint8_t)(off >> 16);
+    dd->page_buf[2] = (uint8_t)(off >> 8);
+    dd->page_buf[3] = (uint8_t)(off >> 0);
+    memcpy(dd->page_buf + 4, data, write_len);
     if (!spi_flash_wren(dd)) goto out;
-    if (!spi_flash_op(dd, 4 + write_len, &tx_data, 0, 0, NULL)) goto out;
+    if (!spi_flash_op(dd, 4 + write_len, dd->page_buf, 0, 0, NULL)) goto out;
     if (!spi_flash_wait_idle(dd)) goto out;
     l -= write_len;
     data += write_len;
@@ -680,6 +722,9 @@ static enum mgos_vfs_dev_err mgos_vfs_dev_spi_flash_close(
     struct mgos_vfs_dev *dev) {
   struct dev_data *dd = (struct dev_data *) dev->dev_data;
   if (dd->own_spi) mgos_spi_close(dd->spi);
+  dev->dev_data = NULL;
+  free(dd->page_buf);
+  free(dd);
   return MGOS_VFS_DEV_ERR_NONE;
 }
 
