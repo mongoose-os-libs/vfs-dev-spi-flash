@@ -51,6 +51,8 @@
 #define SFDP_V16_PT0_LEN (16 * 4) /* rev 1.6 */
 
 #define SPI_FLASH_VENDOR_ADESTO 0x1f
+#define SPI_FLASH_ADESTO_FAMILY_25DF 0x2
+#define SPI_FLASH_ADESTO_FAMILY_25SF 0x4
 
 /* Microchip SPI SST-series chips default to write-locked state. */
 #define SPI_FLASH_VENDOR_MICROCHIP 0xbf
@@ -494,8 +496,10 @@ out_nosfdp:
     }
   } else if (jid[0] == SPI_FLASH_VENDOR_ADESTO) {
     uint8_t family = (jid[1] >> 5);
-    // Only AT25Dxxx devices are supported, AT45D have different command set.
-    if (family != 2) {
+    // Only AT25DF and AT25SF are supported, AT45DB (family 1) have different
+    // command set.
+    if (family != SPI_FLASH_ADESTO_FAMILY_25DF &&
+        family != SPI_FLASH_ADESTO_FAMILY_25SF) {
       LOG(LL_ERROR, ("Unsupported device family (%u)", family));
       return false;
     }
