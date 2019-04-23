@@ -29,6 +29,8 @@ extern "C" {
 
 #define MGOS_VFS_DEV_TYPE_SPI_FLASH "spi_flash"
 
+bool mgos_vfs_dev_spi_flash_init(void);
+
 enum mgos_vfs_dev_err spi_flash_dev_init(struct mgos_vfs_dev *dev,
                                          struct mgos_spi *spi, int spi_cs,
                                          int spi_freq, int spi_mode,
